@@ -1,9 +1,7 @@
-numpy>=1.26.0,<2.2.0
-matplotlib>=1.23
-pandas>=1.26.0  # Keep in mind the Python version requirement
-scikit-learn>=1.19.5
-streamlit>=1.20,<3
-tensorflow==2.19.0
+streamlit
+numpy
+pandas
 yfinance
-plotly
-keras-tuner
+tensorflow
+scikit-learn
+matplotlib
