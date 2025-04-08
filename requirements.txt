@@ -1,9 +1,9 @@
-keras_tuner==1.4.7
-matplotlib==3.10.1
-numpy==2.2.4
-pandas==2.2.3
-plotly==5.24.1
-scikit_learn==1.6.1
-streamlit==1.37.1
+numpy>=1.26.0,<2.2.0
+matplotlib>=1.23
+pandas>=1.26.0  # Keep in mind the Python version requirement
+scikit-learn>=1.19.5
+streamlit>=1.20,<3
 tensorflow==2.19.0
-yfinance==0.2.55
+yfinance
+plotly
+keras-tuner
