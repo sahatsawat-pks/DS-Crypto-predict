@@ -19,7 +19,7 @@ st.title("Cryptocurrency Trend Prediction")
 
 # User inputs
 crypto_symbol = st.text_input("Enter Cryptocurrency Symbol (e.g., BTC-USD):", "BTC-USD")
-days = st.slider("Select number of past days for training:", 60, 730, 365)
+days = st.slider("Select number of past days for training:", 60, 1095, 365)
 pred_days = st.slider("Select number of days to predict:", 7, 365, 30)
 seq_length = st.slider("Select sequence length for time series models:", 5, 60, 20)
 
@@ -227,11 +227,13 @@ def build_simple_model(input_shape, model_type="LSTM"):
     model = Sequential()
     
     if model_type == "LSTM":
-        model.add(LSTM(64, return_sequences=True, input_shape=input_shape))
-        model.add(Dropout(0.2))
-        model.add(LSTM(64, return_sequences=True))
-        model.add(Dropout(0.2))
-        model.add(LSTM(32, return_sequences=False))
+        model.add(LSTM(128, return_sequences=True, input_shape=input_shape))
+        model.add(Dropout(0.3))
+        model.add(LSTM(128, return_sequences=False))
+        model.add(Dropout(0.3))
+        model.add(Dense(64, activation='relu'))
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='huber_loss')
     elif model_type == "GRU":
         model.add(GRU(64, return_sequences=True, input_shape=input_shape))
         model.add(Dropout(0.2))
@@ -281,6 +283,29 @@ if st.button("Train and Predict"):
         
         # Always have Close price as the first column for prediction target
         close_idx = features.index("Close") if "Close" in features else 0
+        
+        if "Close" in features:
+            # Add RSI
+            delta = df['Close'].diff()
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            avg_gain = gain.rolling(window=14).mean()
+            avg_loss = loss.rolling(window=14).mean()
+            rs = avg_gain / avg_loss
+            df['RSI'] = 100 - (100 / (1 + rs))
+
+            # Add Moving Averages
+            df['MA20'] = df['Close'].rolling(window=20).mean()
+            df['MA50'] = df['Close'].rolling(window=50).mean()
+
+            # Add MACD
+            exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+            exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+            df['MACD'] = exp1 - exp2
+    
+            # Update features list
+            features.extend(['RSI', 'MA20', 'MA50', 'MACD'])
+        
         if close_idx != 0 and len(features) > 1:
             # Reorder to have Close as first column
             scaled_data = np.hstack((scaled_data[:, close_idx:close_idx+1], 
