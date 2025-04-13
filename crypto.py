@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import tensorflow as tf
+from tensorflow.keras.regularizers import l2
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, GRU
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
@@ -31,8 +32,10 @@ model_choice = st.sidebar.selectbox("Choose Model Type:", ["LSTM", "GRU", "Bidir
 st.sidebar.header("Advanced Model Options")
 scaler_type = st.sidebar.selectbox("Scaling Method:", ["MinMaxScaler", "StandardScaler", "RobustScaler"])
 features = st.sidebar.multiselect("Features to use:", 
-                                ["Close", "Open", "High", "Low", "Volume"], 
-                                default=["Close"])
+                        ["Close", "Open", "High", "Low", "Volume", 
+                         "SMA_7", "SMA_20", "EMA_9", "RSI", "MACD", 
+                         "Signal_Line", "BB_Upper", "BB_Middle", "BB_Lower", "ROC"], 
+                        default=["Close"])
 predict_full_history = st.sidebar.checkbox("Predict Full Historical Timeline", True)
 
 # Training options
@@ -177,7 +180,7 @@ def build_model_hp(hp, input_shape, model_type):
     hp_dropout_1 = hp.Float('dropout_1', min_value=0.1, max_value=0.5, step=0.1)
     
     if model_type == "LSTM":
-        model.add(LSTM(units=hp_units_1, return_sequences=True, input_shape=input_shape))
+        model.add(LSTM(units=hp_units_1, return_sequences=True, input_shape=input_shape, kernel_regularizer=l2(1e-5), recurrent_regularizer=l2(1e-5)))
     elif model_type == "GRU":
         model.add(GRU(units=hp_units_1, return_sequences=True, input_shape=input_shape))
     elif model_type == "Bidirectional LSTM":
@@ -227,36 +230,99 @@ def build_simple_model(input_shape, model_type="LSTM"):
     model = Sequential()
     
     if model_type == "LSTM":
-        model.add(LSTM(128, return_sequences=True, input_shape=input_shape))
-        model.add(Dropout(0.3))
-        model.add(LSTM(128, return_sequences=False))
-        model.add(Dropout(0.3))
-        model.add(Dense(64, activation='relu'))
-        model.add(Dense(1))
-        model.compile(optimizer='adam', loss='huber_loss')
+        # First LSTM layer
+        model.add(LSTM(64, return_sequences=True, input_shape=input_shape))
+        model.add(Dropout(0.2))
+        
+        # Second LSTM layer
+        model.add(LSTM(64, return_sequences=True))
+        model.add(Dropout(0.2))
+        
+        # Third LSTM layer
+        model.add(LSTM(32, return_sequences=False))
+        model.add(Dropout(0.2))
+        
     elif model_type == "GRU":
         model.add(GRU(64, return_sequences=True, input_shape=input_shape))
         model.add(Dropout(0.2))
-        model.add(GRU(64, return_sequences=True))
-        model.add(Dropout(0.2))
         model.add(GRU(32, return_sequences=False))
+        model.add(Dropout(0.2))
+        
     elif model_type == "Bidirectional LSTM":
         model.add(Bidirectional(LSTM(64, return_sequences=True, input_shape=input_shape)))
         model.add(Dropout(0.2))
-        model.add(Bidirectional(LSTM(64, return_sequences=True)))
+        model.add(Bidirectional(LSTM(32, return_sequences=False)))
         model.add(Dropout(0.2))
-        model.add(LSTM(32, return_sequences=False))
     
-    model.add(Dense(25, activation='relu'))
+    # Dense layers for better feature extraction
+    model.add(Dense(32, activation='relu'))
+    model.add(Dense(16, activation='relu'))
     model.add(Dense(1))
     
-    model.compile(optimizer='adam', loss='mean_squared_error')
+    # Use Huber loss for robustness against outliers
+    model.compile(optimizer='adam', loss='huber_loss')
     return model
+
+def augment_data(X, y, augmentation_factor=0.05, noise_level=0.02):
+    """Augment data with small noise variations"""
+    X_aug, y_aug = [], []
+    
+    for i in range(len(X)):
+        X_aug.append(X[i])
+        y_aug.append(y[i])
+        
+        # Create augmented versions with small noise
+        for _ in range(int(augmentation_factor * len(X))):
+            noise = np.random.normal(0, noise_level, X[i].shape)
+            X_aug.append(X[i] + noise)
+            
+            # Add small noise to target too
+            noise_y = np.random.normal(0, noise_level * 0.5)
+            y_aug.append(y[i] + noise_y)
+    
+    return np.array(X_aug), np.array(y_aug)
+
+def add_technical_indicators(df):
+    """Add technical indicators as features"""
+    # Simple Moving Averages
+    df['SMA_7'] = df['Close'].rolling(window=7).mean()
+    df['SMA_20'] = df['Close'].rolling(window=20).mean()
+    
+    # Exponential Moving Averages
+    df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
+    
+    # Relative Strength Index
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp1 - exp2
+    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    # Bollinger Bands
+    df['BB_Middle'] = df['Close'].rolling(window=20).mean()
+    std = df['Close'].rolling(window=20).std()
+    df['BB_Upper'] = df['BB_Middle'] + (std * 2)
+    df['BB_Lower'] = df['BB_Middle'] - (std * 2)
+    
+    # Price rate of change
+    df['ROC'] = df['Close'].pct_change(periods=5) * 100
+    
+    # Fill NaN values
+    df.fillna(method='bfill', inplace=True)
+    
+    return df
 
 if st.button("Train and Predict"):
     # Load more days to ensure we have enough data after filtering
     df = load_data(crypto_symbol, days + pred_days + seq_length)
-    
+    df = add_technical_indicators(df)
+
     if df.empty:
         st.error(f"No data found for {crypto_symbol}. Please check the symbol and try again.")
     else:
@@ -284,28 +350,6 @@ if st.button("Train and Predict"):
         # Always have Close price as the first column for prediction target
         close_idx = features.index("Close") if "Close" in features else 0
         
-        if "Close" in features:
-            # Add RSI
-            delta = df['Close'].diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            avg_gain = gain.rolling(window=14).mean()
-            avg_loss = loss.rolling(window=14).mean()
-            rs = avg_gain / avg_loss
-            df['RSI'] = 100 - (100 / (1 + rs))
-
-            # Add Moving Averages
-            df['MA20'] = df['Close'].rolling(window=20).mean()
-            df['MA50'] = df['Close'].rolling(window=50).mean()
-
-            # Add MACD
-            exp1 = df['Close'].ewm(span=12, adjust=False).mean()
-            exp2 = df['Close'].ewm(span=26, adjust=False).mean()
-            df['MACD'] = exp1 - exp2
-    
-            # Update features list
-            features.extend(['RSI', 'MA20', 'MA50', 'MACD'])
-        
         if close_idx != 0 and len(features) > 1:
             # Reorder to have Close as first column
             scaled_data = np.hstack((scaled_data[:, close_idx:close_idx+1], 
@@ -330,6 +374,11 @@ if st.button("Train and Predict"):
         else:
             X_train, X_val = X_train_full, None
             y_train, y_val = y_train_full, None
+        
+        if model_choice in ["LSTM", "GRU", "Bidirectional LSTM"]:
+            # Augment training data only
+            X_train, y_train = augment_data(X_train, y_train)
+            st.write(f"Data augmentation applied: Training set size increased to {len(X_train)}")
         
         st.write("### Training the Model...")
         
@@ -520,46 +569,51 @@ if st.button("Train and Predict"):
         
         # Generate future predictions
         future_predictions = []
-        
+        last_sequence = scaled_data[-seq_length:].copy()  # Use the last actual sequence from data
+
         if model_choice in ["LSTM", "GRU", "Bidirectional LSTM"]:
-            # Neural network future prediction
-            last_sequence = X[-1:].reshape(1, seq_length, X.shape[2])  # Start with the last known sequence
-            
+            # Reshape for NN models
+            curr_seq = last_sequence.reshape(1, seq_length, scaled_data.shape[1])
+
             for _ in range(pred_days):
-                # Predict the next step
-                next_pred = model.predict(last_sequence)
+                # Predict next value
+                next_pred = model.predict(curr_seq, verbose=0)
                 future_predictions.append(next_pred[0, 0])
-                
-                # Create a new sequence by shifting and adding the new prediction
-                next_seq = np.copy(last_sequence[0, 1:, :])
-                next_val = np.zeros((1, 1, X.shape[2]))
-                next_val[0, 0, 0] = next_pred[0, 0]  # Set predicted Close
-                
-                last_sequence = np.concatenate([next_seq.reshape(1, -1, X.shape[2]), next_val], axis=1)
+
+                # Update sequence by removing first item and appending new prediction
+                new_seq = np.zeros((1, 1, scaled_data.shape[1]))
+                new_seq[0, 0, 0] = next_pred[0, 0]  # Set predicted Close price
+
+                # For other features, keep the last values (or implement a more sophisticated approach)
+                if scaled_data.shape[1] > 1:
+                    new_seq[0, 0, 1:] = curr_seq[0, -1, 1:]
+
+                # Shift sequence and add new prediction
+                curr_seq = np.concatenate([curr_seq[:, 1:, :], new_seq], axis=1)
         else:
-            # Random Forest future prediction - flatten the sequence for RF
-            last_sequence = X[-1:].reshape(1, -1)  # Get the last known sequence
-            
+            # For Random Forest
+            curr_seq = last_sequence.reshape(1, -1)  # Flatten for RF
+
             for _ in range(pred_days):
-                # Predict the next step
-                next_pred = model.predict(last_sequence)
+                next_pred = model.predict(curr_seq)
                 future_predictions.append(next_pred[0])
-                
-                # Create a new sequence by shifting and adding the new prediction
-                # First remove the oldest timestep features
-                feature_count = X.shape[1] // seq_length
-                new_sequence = last_sequence[0, feature_count:].copy()
-                
-                # Add new prediction and zeros for other features if any
-                new_features = np.zeros(feature_count)
-                new_features[0] = next_pred[0]  # Set predicted Close
-                
-                # Combine to form the new sequence
-                last_sequence = np.append(new_sequence, new_features).reshape(1, -1)
+
+                # Shift and update sequence
+                new_seq = np.roll(curr_seq.reshape(seq_length, -1), -1, axis=0)
+                new_seq[-1, 0] = next_pred[0]  # Set predicted Close price
+                curr_seq = new_seq.reshape(1, -1)
         
         # Convert future predictions to original scale
-        future_inverse = np.zeros((len(future_predictions), feature_data.shape[1]))
-        future_inverse[:, 0] = future_predictions  # Set predicted Close values
+        future_inverse = np.zeros((len(future_predictions), scaled_data.shape[1]))
+        for i in range(len(future_predictions)):
+            future_inverse[i, 0] = future_predictions[i]  # Set predicted Close
+            if i > 0:
+                # Copy other feature values from previous prediction for consistency
+                future_inverse[i, 1:] = future_inverse[i-1, 1:]
+            else:
+                # For first prediction, use the last known values
+                future_inverse[0, 1:] = scaled_data[-1, 1:]
+        
         future_inverse = scaler.inverse_transform(future_inverse)[:, 0]
         
         # Date range for future predictions
