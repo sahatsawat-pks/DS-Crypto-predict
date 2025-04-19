@@ -40,6 +40,21 @@ st.sidebar.header("Training Options")
 test_size = st.sidebar.slider("Test Split (% of data):", 0.05, 0.3, 0.2, 0.05)
 validation_split = st.sidebar.slider("Validation Split (% of training data):", 0.0, 0.3, 0.2, 0.05)
 
+# Add this to your sidebar controls
+st.sidebar.header("Prediction Settings")
+custom_volatility = st.sidebar.checkbox("Custom Volatility", False)
+if custom_volatility:
+    volatility_level = st.sidebar.slider(
+        "Volatility Level:", 
+        min_value=0.0, 
+        max_value=2.0, 
+        value=1.0, 
+        step=0.1,
+        help="Controls how much the predicted prices fluctuate (1.0 = historical volatility)"
+    )
+else:
+    volatility_level = 1.0  # Use historical volatility as is
+
 # Neural network specific options
 if model_choice in ["LSTM", "GRU", "Bidirectional LSTM"]:
     optimize_model = st.sidebar.checkbox("Optimize Model (Hyperparameter Tuning)", False)
@@ -89,6 +104,103 @@ def create_rf_dataset(data, seq_length):
         X.append(data[i:i+seq_length].flatten())
         y.append(data[i+seq_length, 0])  # Target is always the Close price
     return np.array(X), np.array(y)
+
+def generate_future_predictions(model, last_sequence, pred_days, scaled_data, scaler, model_choice, X, volatility_multiplier=1.0):
+    """Generate future predictions with realistic price fluctuations"""
+    future_predictions = []
+    
+    # Calculate volatility parameters from historical data
+    # Use the actual Close price volatility from recent data
+    recent_close_prices = scaled_data[-30:, 0]  # Get the last 30 days of scaled close prices
+    daily_returns = np.diff(recent_close_prices) / recent_close_prices[:-1]
+    volatility = np.std(daily_returns) * volatility_multiplier
+    
+    # Get the short-term trend direction and strength
+    if len(recent_close_prices) > 15:
+        short_term_trend = np.mean(recent_close_prices[-7:]) - np.mean(recent_close_prices[-15:-7])
+    else:
+        short_term_trend = 0
+    
+    if model_choice in ["LSTM", "GRU", "Bidirectional LSTM"]:
+        # Neural network future prediction
+        current_sequence = last_sequence.copy()  # Start with the last known sequence
+        
+        for i in range(pred_days):
+            # Predict the next step (trend component)
+            next_pred = model.predict(current_sequence)
+            trend_value = next_pred[0, 0]
+            
+            # Add realistic volatility
+            # More volatility for further predictions and volatility increases with larger price movements
+            volatility_factor = 1 + (i / pred_days)  # Increases volatility for further out predictions
+            
+            # Generate random component - use normal distribution with mean slightly biased by trend
+            random_component = np.random.normal(
+                loc=short_term_trend * 0.2,  # Slight bias in the direction of recent trend
+                scale=volatility * volatility_factor
+            )
+            
+            # Combine trend prediction with random fluctuation
+            next_value = trend_value + random_component
+            
+            # Ensure the predicted value doesn't change too drastically from the previous one
+            if i > 0:
+                max_daily_change = max(abs(np.max(daily_returns)), abs(np.min(daily_returns))) * 1.5
+                prev_value = future_predictions[-1]
+                allowed_min = prev_value * (1 - max_daily_change)
+                allowed_max = prev_value * (1 + max_daily_change)
+                next_value = max(min(next_value, allowed_max), allowed_min)
+            
+            future_predictions.append(next_value)
+            
+            # Create a new sequence by shifting and adding the new prediction
+            next_seq = np.copy(current_sequence[0, 1:, :])
+            next_val = np.zeros((1, 1, X.shape[2]))
+            next_val[0, 0, 0] = next_value  # Set predicted Close with fluctuation
+            
+            current_sequence = np.concatenate([next_seq.reshape(1, -1, X.shape[2]), next_val], axis=1)
+    else:
+        # Random Forest future prediction - flatten the sequence for RF
+        current_sequence = last_sequence.copy()  # Get the last known sequence
+        
+        for i in range(pred_days):
+            # Predict the next step (trend component)
+            next_pred = model.predict(current_sequence)
+            trend_value = next_pred[0]
+            
+            # Add realistic volatility - similar to neural network approach
+            volatility_factor = 1 + (i / pred_days)
+            random_component = np.random.normal(
+                loc=short_term_trend * 0.2,
+                scale=volatility * volatility_factor
+            )
+            
+            next_value = trend_value + random_component
+            
+            # Ensure realistic changes
+            if i > 0:
+                max_daily_change = max(abs(np.max(daily_returns)), abs(np.min(daily_returns))) * 1.5
+                prev_value = future_predictions[-1]
+                allowed_min = prev_value * (1 - max_daily_change)
+                allowed_max = prev_value * (1 + max_daily_change)
+                next_value = max(min(next_value, allowed_max), allowed_min)
+            
+            future_predictions.append(next_value)
+            
+            # Create a new sequence by shifting and adding the new prediction
+            # First remove the oldest timestep features
+            feature_count = X.shape[1] // seq_length
+            new_sequence = current_sequence[0, feature_count:].copy()
+            
+            # Add new prediction and zeros for other features if any
+            new_features = np.zeros(feature_count)
+            new_features[0] = next_value  # Set predicted Close with fluctuation
+            
+            # Combine to form the new sequence
+            current_sequence = np.append(new_sequence, new_features).reshape(1, -1)
+    
+    return np.array(future_predictions)
+
 
 def generate_trading_recommendations(future_df, current_price):
     """Generate trading recommendations based on predicted prices"""
@@ -231,6 +343,38 @@ def build_model_hp(hp, input_shape, model_type):
         
     model.compile(optimizer=optimizer, loss='mean_squared_error')
     return model
+
+def generate_future_ohlc(future_close_prices, volatility_factor=0.015):
+    """Generate synthetic OHLC data from predicted close prices"""
+    future_ohlc = []
+    
+    for i, close in enumerate(future_close_prices):
+        # For first day, base on last known price
+        if i == 0:
+            prev_close = close
+        else:
+            prev_close = future_close_prices[i-1]
+        
+        # Generate random daily volatility that increases over time
+        time_factor = 1 + (i / len(future_close_prices))
+        day_volatility = volatility_factor * close * time_factor
+        
+        # Create realistic OHLC values
+        # Open is usually close to previous close
+        open_price = prev_close * (1 + np.random.normal(0, 0.003))
+        
+        # High and low are random distances from close
+        high_price = max(open_price, close) + abs(np.random.normal(0, day_volatility))
+        low_price = min(open_price, close) - abs(np.random.normal(0, day_volatility))
+        
+        future_ohlc.append({
+            'Open': open_price,
+            'High': high_price,
+            'Low': low_price,
+            'Close': close
+        })
+    
+    return future_ohlc
 
 def build_simple_model(input_shape, model_type="LSTM"):
     model = Sequential()
@@ -503,44 +647,23 @@ if st.button("Train and Predict"):
         test_actual_inv = scaler.inverse_transform(test_actual_inv)[:, 0]
         
         # Generate future predictions
-        future_predictions = []
-        
+        # Generate future predictions with fluctuations
         if model_choice in ["LSTM", "GRU", "Bidirectional LSTM"]:
-            # Neural network future prediction
-            last_sequence = X[-1:].reshape(1, seq_length, X.shape[2])  # Start with the last known sequence
-            
-            for _ in range(pred_days):
-                # Predict the next step
-                next_pred = model.predict(last_sequence)
-                future_predictions.append(next_pred[0, 0])
-                
-                # Create a new sequence by shifting and adding the new prediction
-                next_seq = np.copy(last_sequence[0, 1:, :])
-                next_val = np.zeros((1, 1, X.shape[2]))
-                next_val[0, 0, 0] = next_pred[0, 0]  # Set predicted Close
-                
-                last_sequence = np.concatenate([next_seq.reshape(1, -1, X.shape[2]), next_val], axis=1)
+            last_sequence = X[-1:].reshape(1, seq_length, X.shape[2])
         else:
-            # Random Forest future prediction - flatten the sequence for RF
-            last_sequence = X[-1:].reshape(1, -1)  # Get the last known sequence
-            
-            for _ in range(pred_days):
-                # Predict the next step
-                next_pred = model.predict(last_sequence)
-                future_predictions.append(next_pred[0])
-                
-                # Create a new sequence by shifting and adding the new prediction
-                # First remove the oldest timestep features
-                feature_count = X.shape[1] // seq_length
-                new_sequence = last_sequence[0, feature_count:].copy()
-                
-                # Add new prediction and zeros for other features if any
-                new_features = np.zeros(feature_count)
-                new_features[0] = next_pred[0]  # Set predicted Close
-                
-                # Combine to form the new sequence
-                last_sequence = np.append(new_sequence, new_features).reshape(1, -1)
-        
+            last_sequence = X[-1:].reshape(1, -1)
+
+        future_predictions = generate_future_predictions(
+            model, 
+            last_sequence, 
+            pred_days, 
+            scaled_data,
+            scaler,
+            model_choice,
+            X,
+            volatility_multiplier=volatility_level
+        )
+
         # Convert future predictions to original scale
         future_inverse = np.zeros((len(future_predictions), feature_data.shape[1]))
         future_inverse[:, 0] = future_predictions  # Set predicted Close values
@@ -563,7 +686,7 @@ if st.button("Train and Predict"):
             st.metric("MAE", f"{mae:.4f}")
         with col2:
             st.metric("R²", f"{r_squared:.4f}")
-            st.metric("MAPE", f"{mape:.2f}%")
+            st.metric("MAPE", f"{mape * 100:.2f}%")
         
         # Create results DataFrame for test data
         test_dates = df.index[test_idx+seq_length:]
@@ -571,6 +694,9 @@ if st.button("Train and Predict"):
             index=test_dates,
             data={'Actual': test_actual_inv, 'Predicted': test_pred_inv}
         )
+
+        future_ohlc = generate_future_ohlc(future_df['Predicted'].values)
+        future_ohlc_df = pd.DataFrame(future_ohlc, index=future_df.index)
         
         # Visualization
         fig = go.Figure()
@@ -605,6 +731,19 @@ if st.button("Train and Predict"):
                 name='Test Predictions',
                 line=dict(color='blue', width=2)
             ))
+        
+        # Add candlestick chart for future predictions
+        fig.add_trace(go.Candlestick(
+            x=future_ohlc_df.index,
+            open=future_ohlc_df['Open'],
+            high=future_ohlc_df['High'],
+            low=future_ohlc_df['Low'],
+            close=future_ohlc_df['Close'],
+            name="Future Predictions",
+            increasing_line_color='rgba(0, 180, 0, 0.7)',
+            decreasing_line_color='rgba(255, 0, 0, 0.7)',
+            opacity=0.7
+        ))
         
         # Plot future predictions
         fig.add_trace(go.Scatter(
