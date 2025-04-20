@@ -147,4 +147,47 @@ plt.ylabel('Model Configuration', fontsize=12)
 plt.tight_layout()
 plt.savefig('top_rmse_models.png', dpi=300)
 
+# Set the style
+plt.style.use('ggplot')
+sns.set(font_scale=1.2)
+
+# Create a figure for MAPE analysis
+plt.figure(figsize=(18, 14))
+
+# 11. Top 10 Models by R2 Score
+ax1 = plt.subplot(2, 2, 1)
+top_r2 = df.sort_values('r2', ascending=False).head(10)
+bars = sns.barplot(x='r2', y='model', hue='features', data=top_r2, palette='viridis', ax=ax1)
+ax1.set_title('Top 10 Models by R2 Score', fontsize=16)
+ax1.set_xlabel('R2 Score (higher is better)', fontsize=12)
+ax1.set_ylabel('Model Type', fontsize=12)
+
+# Add sequence length as text annotation
+for i, row in enumerate(top_r2.itertuples()):
+    ax1.text(0.02, i, f"seq={row.seq_length}, scaler={row.scaler}", va='center', fontsize=8)
+
+# 12. RMSE vs R2 scatter plot colored by model type
+ax2 = plt.subplot(2, 2, 2)
+scatter = sns.scatterplot(x='rmse', y='r2', hue='model', size='feature_count', 
+                         data=df, palette='tab10', sizes=(50, 200), alpha=0.7, ax=ax2)
+ax2.set_title('RMSE vs R2 by Model Type', fontsize=16)
+ax2.set_xlabel('RMSE (lower is better)', fontsize=12)
+ax2.set_ylabel('R2 Score (higher is better)', fontsize=12)
+
+# 13. Model performance by sequence length
+ax3 = plt.subplot(2, 2, 3)
+box = sns.boxplot(x='seq_length', y='rmse', hue='model', data=df, palette='Set3', ax=ax3)
+ax3.set_title('RMSE by Sequence Length and Model Type', fontsize=16)
+ax3.set_xlabel('Sequence Length', fontsize=12)
+ax3.set_ylabel('RMSE (lower is better)', fontsize=12)
+
+# 14. Effect of Scaler Choice on Performance
+ax4 = plt.subplot(2, 2, 4)
+heatmap_data = df.pivot_table(index='model', columns='scaler', values='r2', aggfunc='mean')
+sns.heatmap(heatmap_data, annot=True, cmap='YlGnBu', fmt='.3f', ax=ax4)
+ax4.set_title('Average R2 Score by Model and Scaler', fontsize=16)
+
+plt.tight_layout()
+plt.savefig('model_performance_analysis.png', dpi=300)
+
 print("RMSE visualizations created successfully!")

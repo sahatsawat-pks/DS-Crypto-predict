@@ -222,7 +222,7 @@ def generate_trading_recommendations(future_df, current_price):
     recommendations.append({
         'timeframe': 'Short-term (1 week)',
         'expected_return': short_term_return,
-        'action': 'Buy' if short_term_return > 5 else 'Sell' if short_term_return < -3 else 'Hold',
+        'action': 'Sell' if short_term_return > 5 else 'Buy' if short_term_return < -3 else 'Hold',
         'confidence': min(abs(short_term_return) / 10 * 100, 100),
         'reasoning': f"Expected {'gain' if short_term_return > 0 else 'loss'} of {abs(short_term_return):.2f}% in 1 week"
     })
@@ -230,7 +230,7 @@ def generate_trading_recommendations(future_df, current_price):
         recommendations.append({
             'timeframe': 'Medium-term (2 weeks)',
             'expected_return': medium_term_return,
-            'action': 'Buy' if medium_term_return > 8 else 'Sell' if medium_term_return < -5 else 'Hold',
+            'action': 'Sell' if medium_term_return > 8 else 'Buy' if medium_term_return < -5 else 'Hold',
             'confidence': min(abs(medium_term_return) / 15 * 100, 100),
             'reasoning': f"Expected {'gain' if medium_term_return > 0 else 'loss'} of {abs(medium_term_return):.2f}% in 2 weeks"
         })
@@ -238,7 +238,7 @@ def generate_trading_recommendations(future_df, current_price):
         recommendations.append({
             'timeframe': 'Long-term (End of forecast)',
             'expected_return': long_term_return,
-            'action': 'Buy' if long_term_return > 12 else 'Sell' if long_term_return < -8 else 'Hold',
+            'action': 'Sell' if long_term_return > 12 else 'Buy' if long_term_return < -8 else 'Hold',
             'confidence': min(abs(long_term_return) / 20 * 100, 100),
             'reasoning': f"Expected {'gain' if long_term_return > 0 else 'loss'} of {abs(long_term_return):.2f}% by end of forecast period"
         })
